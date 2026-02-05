@@ -15,23 +15,3 @@ type AgentConfig struct {
 	Enabled     bool     `json:"enabled"`     // 是否全局启用
 	ProviderID  string   `json:"providerId"`  // 关联的Provider ID（空则使用默认）
 }
-
-// Agent AI分析师（兼容旧结构）
-type Agent struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Role   string `json:"role"`
-	Avatar string `json:"avatar"`
-	Color  string `json:"color"`
-}
-
-// ToAgent 将AgentConfig转换为Agent
-func (c *AgentConfig) ToAgent() Agent {
-	return Agent{
-		ID:     c.ID,
-		Name:   c.Name,
-		Role:   c.Role,
-		Avatar: c.Avatar,
-		Color:  c.Color,
-	}
-}

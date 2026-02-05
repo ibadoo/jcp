@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Cpu, Bot, ChevronLeft, Plug, Plus, Trash2, Wrench, Sliders, Check, Loader2 } from 'lucide-react';
+import { X, Cpu, Bot, ChevronLeft, Plug, Plus, Trash2, Wrench, Sliders, Check, Loader2, Brain } from 'lucide-react';
 import { getConfig, updateConfig, getAvailableTools, ToolInfo } from '../services/configService';
 import { getAgentConfigs, updateAgentConfig, AgentConfig } from '../services/agentConfigService';
 import { getMCPServers, MCPServerConfig, MCPServerStatus, testMCPConnection, getMCPServerTools, MCPToolInfo } from '../services/mcpService';
@@ -19,7 +19,16 @@ interface AIConfig {
   isDefault: boolean;
 }
 
-type TabType = 'provider' | 'agent' | 'mcp';
+interface MemoryConfig {
+  enabled: boolean;
+  aiConfigId: string;
+  maxRecentRounds: number;
+  maxKeyFacts: number;
+  maxSummaryLength: number;
+  compressThreshold: number;
+}
+
+type TabType = 'provider' | 'agent' | 'mcp' | 'memory';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -39,6 +48,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   const [availableTools, setAvailableTools] = useState<ToolInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [memoryConfig, setMemoryConfig] = useState<MemoryConfig>({
+    enabled: true,
+    aiConfigId: '',
+    maxRecentRounds: 3,
+    maxKeyFacts: 20,
+    maxSummaryLength: 300,
+    compressThreshold: 5,
+  });
 
   // 原始配置（用于变更检测）
   const [originalConfigs, setOriginalConfigs] = useState<{
@@ -63,6 +80,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     const mcps = await getMCPServers();
     const loadedMcps = mcps || [];
     setMcpServers(loadedMcps);
+    // 加载记忆配置
+    if (config.memory) {
+      setMemoryConfig(config.memory);
+    }
     // 加载可用的内置工具列表
     const tools = await getAvailableTools();
     setAvailableTools(tools || []);
@@ -118,13 +139,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
   // 保存后关闭
   const handleSaveAndClose = async () => {
     setShowCloseConfirm(false);
-    await handleSave(aiConfigs, agentConfigs, mcpServers, setSaving, onClose);
+    await handleSave(aiConfigs, agentConfigs, mcpServers, memoryConfig, setSaving, onClose);
   };
 
   const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
     { id: 'provider', label: '模型基座', icon: <Cpu className="h-4 w-4" /> },
     { id: 'agent', label: 'AI专家', icon: <Bot className="h-4 w-4" /> },
     { id: 'mcp', label: 'MCP服务', icon: <Plug className="h-4 w-4" /> },
+    { id: 'memory', label: '记忆管理', icon: <Brain className="h-4 w-4" /> },
   ];
 
   return (
@@ -191,11 +213,18 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                 }}
               />
             )}
+            {activeTab === 'memory' && (
+              <MemorySettings
+                config={memoryConfig}
+                aiConfigs={aiConfigs}
+                onChange={setMemoryConfig}
+              />
+            )}
           </div>
         </div>
         <Footer
           saving={saving}
-          onSave={() => handleSave(aiConfigs, agentConfigs, mcpServers, setSaving, onClose)}
+          onSave={() => handleSave(aiConfigs, agentConfigs, mcpServers, memoryConfig, setSaving, onClose)}
           onClose={handleClose}
         />
       </div>
@@ -759,16 +788,18 @@ const handleSave = async (
   configs: AIConfig[],
   agents: AgentConfig[],
   mcpServers: MCPServerConfig[],
+  memoryConfig: MemoryConfig,
   setSaving: React.Dispatch<React.SetStateAction<boolean>>,
   onClose: () => void
 ) => {
   setSaving(true);
   try {
-    // 保存 AI 配置和 MCP 配置
+    // 保存 AI 配置、MCP 配置和记忆配置
     await updateConfig({
       aiConfigs: configs,
       defaultAiId: configs.find(c => c.isDefault)?.id || '',
       mcpServers: mcpServers,
+      memory: memoryConfig,
     } as any);
 
     // 保存所有 Agent 配置（会触发后端重载）
@@ -780,6 +811,133 @@ const handleSave = async (
   } finally {
     setSaving(false);
   }
+};
+
+// ========== 记忆管理设置选项卡 ==========
+interface MemorySettingsProps {
+  config: MemoryConfig;
+  aiConfigs: AIConfig[];
+  onChange: (config: MemoryConfig) => void;
+}
+
+const MemorySettings: React.FC<MemorySettingsProps> = ({ config, aiConfigs, onChange }) => {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-white font-medium">记忆管理</h3>
+          <p className="text-slate-400 text-sm mt-1">
+            启用后，AI专家将记住之前的讨论内容，提供更连贯的分析
+          </p>
+        </div>
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input
+            type="checkbox"
+            checked={config.enabled}
+            onChange={(e) => onChange({ ...config, enabled: e.target.checked })}
+            className="sr-only peer"
+          />
+          <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
+        </label>
+      </div>
+
+      {config.enabled && (
+        <div className="space-y-4 pt-4 border-t border-slate-700">
+          {/* LLM 选择 */}
+          <div>
+            <label className="block text-sm text-slate-300 mb-2">
+              摘要模型
+              <span className="text-slate-500 ml-2">(用于生成记忆摘要)</span>
+            </label>
+            <select
+              value={config.aiConfigId || ''}
+              onChange={(e) => onChange({ ...config, aiConfigId: e.target.value })}
+              className="w-full fin-input rounded-lg px-3 py-2 text-white text-sm"
+            >
+              <option value="">使用默认模型</option>
+              {aiConfigs.map(ai => (
+                <option key={ai.id} value={ai.id}>
+                  {ai.name} ({ai.provider}) - {ai.modelName}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              建议选择较快的模型以减少延迟，留空则使用会议默认模型
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm text-slate-300 mb-2">
+              保留最近讨论轮次
+              <span className="text-slate-500 ml-2">({config.maxRecentRounds}轮)</span>
+            </label>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              value={config.maxRecentRounds}
+              onChange={(e) => onChange({ ...config, maxRecentRounds: parseInt(e.target.value) })}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+            />
+            <div className="flex justify-between text-xs text-slate-500 mt-1">
+              <span>1轮</span>
+              <span>10轮</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-slate-300 mb-2">
+              触发压缩阈值
+              <span className="text-slate-500 ml-2">({config.compressThreshold}轮)</span>
+            </label>
+            <input
+              type="range"
+              min="3"
+              max="15"
+              value={config.compressThreshold}
+              onChange={(e) => onChange({ ...config, compressThreshold: parseInt(e.target.value) })}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              超过此轮次后，旧讨论将被压缩为摘要
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm text-slate-300 mb-2">
+              最大关键事实数
+              <span className="text-slate-500 ml-2">({config.maxKeyFacts}条)</span>
+            </label>
+            <input
+              type="range"
+              min="5"
+              max="50"
+              step="5"
+              value={config.maxKeyFacts}
+              onChange={(e) => onChange({ ...config, maxKeyFacts: parseInt(e.target.value) })}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-slate-300 mb-2">
+              摘要最大长度
+              <span className="text-slate-500 ml-2">({config.maxSummaryLength}字)</span>
+            </label>
+            <input
+              type="range"
+              min="100"
+              max="500"
+              step="50"
+              value={config.maxSummaryLength}
+              onChange={(e) => onChange({ ...config, maxSummaryLength: parseInt(e.target.value) })}
+              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 // ========== MCP 设置选项卡 ==========

@@ -12,6 +12,7 @@ import (
 	"github.com/run-bigpig/jcp/internal/adk/mcp"
 	"github.com/run-bigpig/jcp/internal/adk/tools"
 	"github.com/run-bigpig/jcp/internal/logger"
+	"github.com/run-bigpig/jcp/internal/memory"
 	"github.com/run-bigpig/jcp/internal/models"
 
 	"google.golang.org/adk/agent"
@@ -35,7 +36,6 @@ const (
 // 错误定义
 var (
 	ErrMeetingTimeout   = errors.New("会议超时，已返回部分结果")
-	ErrAgentTimeout     = errors.New("专家响应超时")
 	ErrModeratorTimeout = errors.New("小韭菜响应超时")
 	ErrNoAIConfig       = errors.New("未配置 AI 服务")
 	ErrNoAgents         = errors.New("没有可用的专家")
@@ -43,24 +43,11 @@ var (
 
 // Service 会议室服务，编排多专家并行分析
 type Service struct {
-	modelFactory *adk.ModelFactory
-	toolRegistry *tools.Registry
-	mcpManager   *mcp.Manager
-}
-
-// NewService 创建会议室服务
-func NewService() *Service {
-	return &Service{
-		modelFactory: adk.NewModelFactory(),
-	}
-}
-
-// NewServiceWithTools 创建带工具的会议室服务
-func NewServiceWithTools(registry *tools.Registry) *Service {
-	return &Service{
-		modelFactory: adk.NewModelFactory(),
-		toolRegistry: registry,
-	}
+	modelFactory    *adk.ModelFactory
+	toolRegistry    *tools.Registry
+	mcpManager      *mcp.Manager
+	memoryManager   *memory.Manager
+	memoryAIConfig  *models.AIConfig // 记忆管理使用的 LLM 配置
 }
 
 // NewServiceFull 创建完整配置的会议室服务
@@ -70,6 +57,16 @@ func NewServiceFull(registry *tools.Registry, mcpMgr *mcp.Manager) *Service {
 		toolRegistry: registry,
 		mcpManager:   mcpMgr,
 	}
+}
+
+// SetMemoryManager 设置记忆管理器
+func (s *Service) SetMemoryManager(memMgr *memory.Manager) {
+	s.memoryManager = memMgr
+}
+
+// SetMemoryAIConfig 设置记忆管理使用的 LLM 配置
+func (s *Service) SetMemoryAIConfig(aiConfig *models.AIConfig) {
+	s.memoryAIConfig = aiConfig
 }
 
 // ChatRequest 聊天请求
@@ -152,6 +149,34 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 
 	var responses []ChatResponse
 	moderator := NewModerator(llm)
+
+	// 设置 LLM 到记忆管理器（启用摘要功能）
+	if s.memoryManager != nil {
+		// 优先使用配置的记忆 LLM，否则使用会议 LLM
+		if s.memoryAIConfig != nil {
+			memoryLLM, err := s.modelFactory.CreateModel(meetingCtx, s.memoryAIConfig)
+			if err == nil {
+				s.memoryManager.SetLLM(memoryLLM)
+				log.Debug("using dedicated memory LLM: %s", s.memoryAIConfig.ModelName)
+			} else {
+				log.Warn("create memory LLM error, fallback to meeting LLM: %v", err)
+				s.memoryManager.SetLLM(llm)
+			}
+		} else {
+			s.memoryManager.SetLLM(llm)
+		}
+	}
+
+	// 加载股票记忆（如果启用了记忆管理）
+	var stockMemory *memory.StockMemory
+	var memoryContext string
+	if s.memoryManager != nil {
+		stockMemory, _ = s.memoryManager.GetOrCreate(req.Stock.Symbol, req.Stock.Name)
+		memoryContext = s.memoryManager.BuildContext(stockMemory, req.Query)
+		if memoryContext != "" {
+			log.Debug("loaded memory context for %s, len: %d", req.Stock.Symbol, len(memoryContext))
+		}
+	}
 
 	log.Info("stock: %s, query: %s, agents: %d", req.Stock.Symbol, req.Query, len(req.AllAgents))
 
@@ -240,6 +265,10 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 
 		// 构建前面专家发言的上下文
 		previousContext := s.buildPreviousContext(history)
+		// 合并记忆上下文
+		if memoryContext != "" {
+			previousContext = memoryContext + "\n" + previousContext
+		}
 
 		// 运行单个专家（带超时控制）
 		agentCtx, agentCancel := context.WithTimeout(meetingCtx, AgentTimeout)
@@ -343,6 +372,20 @@ func (s *Service) RunSmartMeetingWithCallback(ctx context.Context, aiConfig *mod
 		if respCallback != nil {
 			respCallback(summaryResp)
 		}
+	}
+
+	// 保存记忆（如果启用了记忆管理）
+	if s.memoryManager != nil && stockMemory != nil && summary != "" {
+		// 提取关键点（使用新的 context，因为会议 ctx 可能已取消）
+		keyPoints := s.extractKeyPointsFromHistory(context.Background(), history)
+		// 异步保存记忆，不阻塞返回
+		go func() {
+			if err := s.memoryManager.AddRound(context.Background(), stockMemory, req.Query, summary, keyPoints); err != nil {
+				log.Error("save memory error: %v", err)
+			} else {
+				log.Debug("saved memory for %s", req.Stock.Symbol)
+			}
+		}()
 	}
 
 	return responses, nil
@@ -454,21 +497,6 @@ func (s *Service) runSingleAgentWithContext(ctx context.Context, builder *adk.Ex
 	return content, nil
 }
 
-// filterAgents 根据 ID 列表筛选专家
-func (s *Service) filterAgents(all []models.AgentConfig, ids []string) []models.AgentConfig {
-	idSet := make(map[string]bool)
-	for _, id := range ids {
-		idSet[id] = true
-	}
-	var result []models.AgentConfig
-	for _, a := range all {
-		if idSet[a.ID] {
-			result = append(result, a)
-		}
-	}
-	return result
-}
-
 // filterAgentsOrdered 按指定顺序筛选专家（保持小韭菜选择的顺序）
 func (s *Service) filterAgentsOrdered(all []models.AgentConfig, ids []string) []models.AgentConfig {
 	agentMap := make(map[string]models.AgentConfig)
@@ -495,6 +523,39 @@ func (s *Service) buildPreviousContext(history []DiscussionEntry) string {
 		sb.WriteString(fmt.Sprintf("- %s（%s）：%s\n\n", entry.AgentName, entry.Role, entry.Content))
 	}
 	return sb.String()
+}
+
+// extractKeyPointsFromHistory 从讨论历史中提取关键点
+func (s *Service) extractKeyPointsFromHistory(ctx context.Context, history []DiscussionEntry) []string {
+	// 如果有记忆管理器，使用 LLM 智能提取
+	if s.memoryManager != nil {
+		discussions := make([]memory.DiscussionInput, 0, len(history))
+		for _, entry := range history {
+			discussions = append(discussions, memory.DiscussionInput{
+				AgentName: entry.AgentName,
+				Role:      entry.Role,
+				Content:   entry.Content,
+			})
+		}
+		keyPoints, err := s.memoryManager.ExtractKeyPoints(ctx, discussions)
+		if err != nil {
+			log.Warn("LLM extract key points error, fallback: %v", err)
+		} else {
+			return keyPoints
+		}
+	}
+
+	// 降级：简单截取
+	keyPoints := make([]string, 0, len(history))
+	for _, entry := range history {
+		runes := []rune(entry.Content)
+		content := entry.Content
+		if len(runes) > 80 {
+			content = string(runes[:80]) + "..."
+		}
+		keyPoints = append(keyPoints, fmt.Sprintf("%s: %s", entry.AgentName, content))
+	}
+	return keyPoints
 }
 
 // runSingleAgentWithHistory 运行单个专家（带历史上下文和进度回调）

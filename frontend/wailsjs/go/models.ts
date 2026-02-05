@@ -218,6 +218,28 @@ export namespace models {
 	        this.providerId = source["providerId"];
 	    }
 	}
+	export class MemoryConfig {
+	    enabled: boolean;
+	    aiConfigId: string;
+	    maxRecentRounds: number;
+	    maxKeyFacts: number;
+	    maxSummaryLength: number;
+	    compressThreshold: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.aiConfigId = source["aiConfigId"];
+	        this.maxRecentRounds = source["maxRecentRounds"];
+	        this.maxKeyFacts = source["maxKeyFacts"];
+	        this.maxSummaryLength = source["maxSummaryLength"];
+	        this.compressThreshold = source["compressThreshold"];
+	    }
+	}
 	export class MCPServerConfig {
 	    id: string;
 	    name: string;
@@ -250,6 +272,7 @@ export namespace models {
 	    aiConfigs: AIConfig[];
 	    defaultAiId: string;
 	    mcpServers: MCPServerConfig[];
+	    memory: MemoryConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -262,6 +285,7 @@ export namespace models {
 	        this.aiConfigs = this.convertValues(source["aiConfigs"], AIConfig);
 	        this.defaultAiId = source["defaultAiId"];
 	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);
+	        this.memory = this.convertValues(source["memory"], MemoryConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -369,6 +393,7 @@ export namespace models {
 	        this.amount = source["amount"];
 	    }
 	}
+	
 	export class OrderBookItem {
 	    price: number;
 	    size: number;

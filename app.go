@@ -9,6 +9,7 @@ import (
 	"github.com/run-bigpig/jcp/internal/adk/tools"
 	"github.com/run-bigpig/jcp/internal/agent"
 	"github.com/run-bigpig/jcp/internal/meeting"
+	"github.com/run-bigpig/jcp/internal/memory"
 	"github.com/run-bigpig/jcp/internal/models"
 	"github.com/run-bigpig/jcp/internal/services"
 	"github.com/run-bigpig/jcp/internal/services/hottrend"
@@ -30,6 +31,7 @@ type App struct {
 	agentContainer     *agent.Container
 	toolRegistry       *tools.Registry
 	mcpManager         *mcp.Manager
+	memoryManager      *memory.Manager
 }
 
 // NewApp creates a new App application struct
@@ -76,6 +78,30 @@ func (a *App) startup(ctx context.Context) {
 	// 初始化会议室服务（带工具和 MCP 支持）
 	a.meetingService = meeting.NewServiceFull(toolRegistry, a.mcpManager)
 
+	// 根据配置初始化记忆管理器
+	memConfig := a.configService.GetConfig().Memory
+	if memConfig.Enabled {
+		a.memoryManager = memory.NewManagerWithConfig(dataDir, memory.Config{
+			MaxRecentRounds:   memConfig.MaxRecentRounds,
+			MaxKeyFacts:       memConfig.MaxKeyFacts,
+			MaxSummaryLength:  memConfig.MaxSummaryLength,
+			CompressThreshold: memConfig.CompressThreshold,
+		})
+		a.meetingService.SetMemoryManager(a.memoryManager)
+
+		// 设置记忆管理专用的 LLM 配置
+		if memConfig.AIConfigID != "" {
+			for i := range a.configService.GetConfig().AIConfigs {
+				if a.configService.GetConfig().AIConfigs[i].ID == memConfig.AIConfigID {
+					a.meetingService.SetMemoryAIConfig(&a.configService.GetConfig().AIConfigs[i])
+					fmt.Printf("[startup] Memory LLM: %s\n", a.configService.GetConfig().AIConfigs[i].ModelName)
+					break
+				}
+			}
+		}
+		fmt.Println("[startup] Memory manager enabled")
+	}
+
 	// 初始化Session服务
 	a.sessionService = services.NewSessionService()
 
@@ -117,6 +143,15 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 			fmt.Println("[UpdateConfig] MCP reload error:", err)
 		}
 	}
+	// 更新记忆管理器的 LLM 配置
+	if a.meetingService != nil && config.Memory.AIConfigID != "" {
+		for i := range config.AIConfigs {
+			if config.AIConfigs[i].ID == config.Memory.AIConfigID {
+				a.meetingService.SetMemoryAIConfig(&config.AIConfigs[i])
+				break
+			}
+		}
+	}
 	return "success"
 }
 
@@ -144,6 +179,12 @@ func (a *App) RemoveFromWatchlist(symbol string) string {
 	a.marketPusher.RemoveSubscription(symbol)
 	// 清空该股票的聊天记录
 	a.sessionService.ClearMessages(symbol)
+	// 同步清除该股票的记忆
+	if a.memoryManager != nil {
+		if err := a.memoryManager.DeleteMemory(symbol); err != nil {
+			fmt.Printf("[RemoveFromWatchlist] delete memory error: %v\n", err)
+		}
+	}
 	return "success"
 }
 
@@ -201,25 +242,43 @@ func (a *App) getDefaultAIConfig(config *models.AppConfig) *models.AIConfig {
 
 // GetOrCreateSession 获取或创建Session
 func (a *App) GetOrCreateSession(stockCode, stockName string) *models.StockSession {
+	if a.sessionService == nil {
+		return nil
+	}
 	session, _ := a.sessionService.GetOrCreateSession(stockCode, stockName)
 	return session
 }
 
 // GetSessionMessages 获取Session消息
 func (a *App) GetSessionMessages(stockCode string) []models.ChatMessage {
+	if a.sessionService == nil {
+		return nil
+	}
 	return a.sessionService.GetMessages(stockCode)
 }
 
 // ClearSessionMessages 清空Session消息
 func (a *App) ClearSessionMessages(stockCode string) string {
+	if a.sessionService == nil {
+		return "service not ready"
+	}
 	if err := a.sessionService.ClearMessages(stockCode); err != nil {
 		return err.Error()
+	}
+	// 同步清除该股票的记忆
+	if a.memoryManager != nil {
+		if err := a.memoryManager.DeleteMemory(stockCode); err != nil {
+			fmt.Printf("[ClearSessionMessages] delete memory error: %v\n", err)
+		}
 	}
 	return "success"
 }
 
 // UpdateStockPosition 更新股票持仓信息
 func (a *App) UpdateStockPosition(stockCode string, shares int64, costPrice float64) string {
+	if a.sessionService == nil {
+		return "service not ready"
+	}
 	if err := a.sessionService.UpdatePosition(stockCode, shares, costPrice); err != nil {
 		return err.Error()
 	}
@@ -391,24 +450,6 @@ func (a *App) runDirectMeeting(req MeetingMessageRequest, stock models.Stock, ai
 
 	// 转换并保存响应，同时推送事件
 	return a.convertSaveAndEmitResponses(req.StockCode, responses, req.ReplyToId)
-}
-
-// convertAndSaveResponses 转换响应并保存
-func (a *App) convertAndSaveResponses(stockCode string, responses []meeting.ChatResponse, replyTo string) []models.ChatMessage {
-	var messages []models.ChatMessage
-	for _, resp := range responses {
-		messages = append(messages, models.ChatMessage{
-			AgentID:   resp.AgentID,
-			AgentName: resp.AgentName,
-			Role:      resp.Role,
-			Content:   resp.Content,
-			ReplyTo:   replyTo,
-			Round:     resp.Round,
-			MsgType:   resp.MsgType,
-		})
-	}
-	a.sessionService.AddMessages(stockCode, messages)
-	return messages
 }
 
 // convertSaveAndEmitResponses 转换响应、保存并推送事件（统一体验）

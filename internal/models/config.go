@@ -52,4 +52,15 @@ type AppConfig struct {
 	AIConfigs       []AIConfig        `json:"aiConfigs"`
 	DefaultAIID     string            `json:"defaultAiId"`
 	MCPServers      []MCPServerConfig `json:"mcpServers"` // MCP服务器配置列表
+	Memory          MemoryConfig      `json:"memory"`     // 记忆管理配置
+}
+
+// MemoryConfig 记忆管理配置
+type MemoryConfig struct {
+	Enabled           bool   `json:"enabled"`           // 是否启用记忆管理
+	AIConfigID        string `json:"aiConfigId"`        // 使用的 LLM 配置 ID（空则使用默认）
+	MaxRecentRounds   int    `json:"maxRecentRounds"`   // 保留最近几轮讨论
+	MaxKeyFacts       int    `json:"maxKeyFacts"`       // 最大关键事实数
+	MaxSummaryLength  int    `json:"maxSummaryLength"`  // 摘要最大字数
+	CompressThreshold int    `json:"compressThreshold"` // 触发压缩的轮次数
 }

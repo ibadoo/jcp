@@ -15,7 +15,6 @@ import (
 type ConfigService struct {
 	configPath    string
 	watchlistPath string
-	sessionsPath  string
 	config        *models.AppConfig
 	watchlist     []models.Stock
 	mu            sync.RWMutex
@@ -30,7 +29,6 @@ func NewConfigService(dataDir string) (*ConfigService, error) {
 	cs := &ConfigService{
 		configPath:    filepath.Join(dataDir, "config.json"),
 		watchlistPath: filepath.Join(dataDir, "watchlist.json"),
-		sessionsPath:  filepath.Join(dataDir, "sessions.json"),
 	}
 
 	if err := cs.loadConfig(); err != nil {
@@ -72,6 +70,13 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 		DarkTheme:       true,
 		AIConfigs:       []models.AIConfig{},
 		DefaultAIID:     "",
+		Memory: models.MemoryConfig{
+			Enabled:           true,
+			MaxRecentRounds:   3,
+			MaxKeyFacts:       20,
+			MaxSummaryLength:  300,
+			CompressThreshold: 5,
+		},
 	}
 }
 
@@ -82,13 +87,6 @@ func (cs *ConfigService) saveConfigLocked() error {
 		return err
 	}
 	return os.WriteFile(cs.configPath, data, 0644)
-}
-
-// SaveConfig 保存配置
-func (cs *ConfigService) SaveConfig() error {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	return cs.saveConfigLocked()
 }
 
 // GetConfig 获取配置

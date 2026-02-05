@@ -242,25 +242,6 @@ func (m *Manager) GetServerTools(serverID string) ([]ToolInfo, error) {
 	return tools, nil
 }
 
-// GetAllServerTools 获取所有已启用 MCP 服务器的工具列表
-func (m *Manager) GetAllServerTools() []ToolInfo {
-	m.mu.RLock()
-	serverIDs := make([]string, 0, len(m.configs))
-	for id := range m.configs {
-		serverIDs = append(serverIDs, id)
-	}
-	m.mu.RUnlock()
-
-	var allTools []ToolInfo
-	for _, id := range serverIDs {
-		tools, err := m.GetServerTools(id)
-		if err == nil && tools != nil {
-			allTools = append(allTools, tools...)
-		}
-	}
-	return allTools
-}
-
 // GetToolInfosByServerIDs 根据服务器 ID 列表获取工具信息
 func (m *Manager) GetToolInfosByServerIDs(serverIDs []string) []ToolInfo {
 	log.Info("获取工具信息, 服务器IDs: %v", serverIDs)
