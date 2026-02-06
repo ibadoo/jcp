@@ -14,6 +14,7 @@
 ### 核心特性
 
 - **多 Agent 智库** - 多个 AI 专家角色协作讨论，提供多维度分析视角
+- **智能记忆系统** - 按股票隔离的长期记忆，AI 能记住历史讨论和关键结论
 - **实时行情** - 股票实时数据、K线图表、盘口深度一应俱全
 - **热点舆情** - 聚合百度、抖音、B站、头条等平台热点趋势
 - **研报服务** - 专业研究报告查询和智能分析
@@ -29,6 +30,7 @@
 | **UI** | TailwindCSS + Lucide Icons |
 | **图表** | Recharts |
 | **AI** | OpenAI / Google Gemini API |
+| **分词** | Jieba (gojieba) |
 
 ## 功能展示
 
@@ -51,6 +53,7 @@
 | 🔥 **热点舆情** | 百度/抖音/B站/头条热点聚合 |
 | 📊 **研报服务** | 专业研报查询与分析 |
 | 💬 **会议室** | Agent 多轮讨论、MCP 工具调用 |
+| 🧠 **记忆系统** | 按股票隔离的长期记忆、历史摘要、关键事实提取 |
 
 ## 快速开始
 
@@ -59,6 +62,10 @@
 - Go 1.24+
 - Node.js 18+
 - Wails CLI v2
+- **CGO 环境**（记忆系统依赖 jieba 分词库）
+  - Windows: 需安装 MinGW-w64 或 TDM-GCC
+  - macOS: 需安装 Xcode Command Line Tools
+  - Linux: 需安装 gcc/g++
 
 ### 安装 Wails CLI
 
@@ -91,12 +98,17 @@ wails dev
 
 ### 构建发布版本
 
+> **重要**: 本项目使用了 jieba 分词库，编译时必须启用 CGO。
+
 ```bash
+# 确保 CGO 已启用
+export CGO_ENABLED=1
+
 # 构建当前平台
 wails build
 
-# 构建 Windows 版本
-wails build -platform windows/amd64
+# 构建 Windows 版本 (需要 MinGW 交叉编译环境)
+CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc wails build -platform windows/amd64
 
 # 构建 macOS 版本
 wails build -platform darwin/amd64
@@ -150,6 +162,28 @@ ccjc/
 | 风控专家 | 风险管理 | 风险评估、仓位建议 |
 
 Agent 配置可在 `data/agents.json` 中自定义。
+
+## 记忆系统
+
+项目实现了按股票隔离的智能记忆系统，让 AI 能够"记住"历史讨论：
+
+### 核心能力
+
+| 功能 | 说明 |
+|------|------|
+| **股票隔离** | 每只股票独立记忆空间，互不干扰 |
+| **关键事实提取** | 自动提取讨论中的重要事实、观点、决策 |
+| **历史摘要** | LLM 自动生成历史讨论摘要 |
+| **相关性检索** | 基于 TF-IDF 的关键词匹配，召回相关历史 |
+| **自动压缩** | 超过阈值自动压缩旧记忆，控制上下文长度 |
+
+### 记忆结构
+
+- **KeyFacts**: 关键事实列表（事实/观点/决策）
+- **RecentRounds**: 最近 N 轮讨论详情
+- **Summary**: AI 生成的历史摘要
+
+记忆数据存储在 `data/memory/` 目录下，按股票代码分文件存储。
 
 ## MCP 扩展
 
